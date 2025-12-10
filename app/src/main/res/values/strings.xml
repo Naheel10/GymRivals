@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">cs407 Project</string>
+    <string name="default_web_client_id">1093417089508-jajm5ciep6ap14010m4ki39j5llgltjs.apps.googleusercontent.com</string>
+
 </resources>

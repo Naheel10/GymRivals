@@ -14,6 +14,7 @@
     <!-- Optional feature declaration (not required but good practice) -->
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:allowBackup="true"
@@ -24,6 +25,9 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Cs407Project">
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyBmOkDn7vMhwxmQmMa42Iu6ebG33SenoLg"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"

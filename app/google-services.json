@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "351734699924",
+    "project_id": "gymrivals-74c06",
+    "storage_bucket": "gymrivals-74c06.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:351734699924:android:32e1e3b77ed38c2e4be181",
+        "android_client_info": {
+          "package_name": "com.cs407.cs407project"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAPpmRWnyMRE9xzpvNxTc1kTPgY1tfZl2s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

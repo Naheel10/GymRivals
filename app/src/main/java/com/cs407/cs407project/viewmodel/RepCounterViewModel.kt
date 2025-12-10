@@ -5,11 +5,14 @@ import android.util.Log
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
+import com.cs407.cs407project.data.GymRivalsCloudRepository
 import com.cs407.cs407project.data.RepCountRepository
 import com.cs407.cs407project.data.RepSession
 import com.cs407.cs407project.repcounter.ExerciseType
@@ -18,22 +21,17 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.pose.PoseDetection
 import com.google.mlkit.vision.pose.PoseDetector
 import com.google.mlkit.vision.pose.accurate.AccuratePoseDetectorOptions
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import com.google.common.util.concurrent.ListenableFuture
 
 /**
- * UI state for the Rep Counter screen
- *
- * @property isRunning Whether the rep counting session is active
- * @property isPaused Whether the session is paused
- * @property repCount Current number of reps counted
- * @property exerciseType Current exercise type being counted
- * @property elapsedSeconds Time elapsed since session start (in seconds)
- * @property cameraError Error message if camera initialization fails
- * @property permissionGranted Whether camera permission has been granted
+ * UI State for the Rep Counter screen.
  */
 data class RepCounterUiState(
     val isRunning: Boolean = false,
@@ -46,21 +44,7 @@ data class RepCounterUiState(
 )
 
 /**
- * ViewModel for managing rep counting with ML Kit Pose Detection
- *
- * This ViewModel handles:
- * - Camera lifecycle and frame processing
- * - ML Kit Pose Detection setup
- * - Rep counting logic via RepCounter
- * - Timer for session duration
- * - Saving sessions to RepCountRepository
- *
- * ## Usage:
- * 1. Call `setCameraPermission(true)` after camera permission is granted
- * 2. Call `initializeCamera(lifecycleOwner, previewView)` to start camera
- * 3. Call `setExerciseType()` to choose push-ups or squats
- * 4. Call `startCounting()` to begin counting reps
- * 5. Call `stopCounting()` to end session and save results
+ * ViewModel for ML Kit pose-based rep counter.
  */
 class RepCounterViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -68,42 +52,38 @@ class RepCounterViewModel(app: Application) : AndroidViewModel(app) {
         private const val TAG = "RepCounterViewModel"
     }
 
-    // UI State
+    // ---------- STATE ----------
     private val _state = MutableStateFlow(RepCounterUiState())
     val state = _state.asStateFlow()
 
-    // ML Kit Pose Detector
+    // ML Kit pose detector
     private var poseDetector: PoseDetector? = null
 
-    // Rep counting logic
+    // Rep counter logic
     private var repCounter: RepCounter? = null
 
-    // Camera components
+    // CameraX
     private var cameraProvider: ProcessCameraProvider? = null
     private var imageAnalysis: ImageAnalysis? = null
     private var cameraExecutor: ExecutorService? = null
 
-    // Timer tracking
+    // Timer
     private var sessionStartTime: Long = 0L
-    private var timerJob: kotlinx.coroutines.Job? = null
+    private var timerJob: Job? = null
 
     init {
-        // Initialize ML Kit Pose Detector with accurate model
-        val options = AccuratePoseDetectorOptions.Builder()
+        // Accurate ML Kit pose model
+        val opts = AccuratePoseDetectorOptions.Builder()
             .setDetectorMode(AccuratePoseDetectorOptions.STREAM_MODE)
             .build()
 
-        poseDetector = PoseDetection.getClient(options)
+        poseDetector = PoseDetection.getClient(opts)
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         Log.d(TAG, "RepCounterViewModel initialized")
     }
 
-    /**
-     * Sets whether camera permission has been granted
-     *
-     * @param granted True if permission is granted
-     */
+    // ---------- PERMISSION ----------
     fun setCameraPermission(granted: Boolean) {
         _state.value = _state.value.copy(permissionGranted = granted)
         if (!granted) {
@@ -111,66 +91,43 @@ class RepCounterViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /**
-     * Sets the exercise type to count
-     *
-     * @param type The exercise type (PUSH_UP or SQUAT)
-     */
+    // ---------- EXERCISE TYPE ----------
     fun setExerciseType(type: ExerciseType) {
-        if (_state.value.isRunning) {
-            Log.w(TAG, "Cannot change exercise type while counting")
-            return
-        }
-
+        if (_state.value.isRunning) return
         _state.value = _state.value.copy(exerciseType = type)
-        Log.d(TAG, "Exercise type set to: $type")
+        Log.d(TAG, "Exercise type set to $type")
     }
 
-    /**
-     * Initializes the camera and starts preview
-     *
-     * Must be called after camera permission is granted and before starting counting.
-     *
-     * @param lifecycleOwner The lifecycle owner (usually the Activity)
-     * @param previewView The PreviewView to display camera feed
-     */
-    fun initializeCamera(
-        lifecycleOwner: LifecycleOwner,
-        previewView: androidx.camera.view.PreviewView
-    ) {
+    // ---------- CAMERA INITIALIZATION ----------
+    fun initializeCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(getApplication())
 
         cameraProviderFuture.addListener({
+
             try {
                 cameraProvider = cameraProviderFuture.get()
 
-                // Setup preview
-                val preview = androidx.camera.core.Preview.Builder()
-                    .build()
-                    .also {
-                        it.setSurfaceProvider(previewView.surfaceProvider)
-                    }
+                // Preview use case
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
 
-                // Setup image analysis for pose detection
+                // Analysis use case
                 imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
-                    .also {
-                        it.setAnalyzer(cameraExecutor!!) { imageProxy ->
+                    .apply {
+                        setAnalyzer(cameraExecutor!!) { imageProxy ->
                             processImageProxy(imageProxy)
                         }
                     }
 
-                // Select front camera
-                val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+                val selector = CameraSelector.DEFAULT_FRONT_CAMERA
 
-                // Unbind all use cases before rebinding
                 cameraProvider?.unbindAll()
-
-                // Bind use cases to camera
                 cameraProvider?.bindToLifecycle(
                     lifecycleOwner,
-                    cameraSelector,
+                    selector,
                     preview,
                     imageAnalysis
                 )
@@ -178,28 +135,23 @@ class RepCounterViewModel(app: Application) : AndroidViewModel(app) {
                 Log.d(TAG, "Camera initialized successfully")
 
             } catch (e: Exception) {
-                Log.e(TAG, "Camera initialization failed", e)
+                Log.e(TAG, "Camera initialization error", e)
                 _state.value = _state.value.copy(cameraError = "Camera error: ${e.message}")
             }
+
         }, ContextCompat.getMainExecutor(getApplication()))
     }
 
-    /**
-     * Starts the rep counting session
-     */
+    // ---------- COUNTING ----------
     fun startCounting() {
-        if (_state.value.isRunning) {
-            Log.w(TAG, "Already counting")
-            return
-        }
+        if (_state.value.isRunning) return
 
-        // Initialize rep counter with current exercise type
         repCounter = RepCounter(_state.value.exerciseType) { newCount ->
             _state.value = _state.value.copy(repCount = newCount)
         }
 
-        // Reset state
         sessionStartTime = System.currentTimeMillis()
+
         _state.value = _state.value.copy(
             isRunning = true,
             isPaused = false,
@@ -207,41 +159,26 @@ class RepCounterViewModel(app: Application) : AndroidViewModel(app) {
             elapsedSeconds = 0
         )
 
-        // Start timer
         startTimer()
-
-        Log.d(TAG, "Started counting ${_state.value.exerciseType}")
+        Log.d(TAG, "Started counting.")
     }
 
-    /**
-     * Pauses the rep counting session
-     */
     fun pauseCounting() {
         if (!_state.value.isRunning || _state.value.isPaused) return
-
         _state.value = _state.value.copy(isPaused = true)
-        Log.d(TAG, "Counting paused")
     }
 
-    /**
-     * Resumes the rep counting session
-     */
     fun resumeCounting() {
         if (!_state.value.isRunning || !_state.value.isPaused) return
-
         _state.value = _state.value.copy(isPaused = false)
-        Log.d(TAG, "Counting resumed")
     }
 
-    /**
-     * Stops the rep counting session and saves the results
-     */
     fun stopCounting() {
         if (!_state.value.isRunning) return
 
         stopTimer()
 
-        // Save session to repository
+        // Build session object from current UI state
         val session = RepSession(
             exerciseType = _state.value.exerciseType.name.replace("_", " ")
                 .lowercase()
@@ -251,93 +188,73 @@ class RepCounterViewModel(app: Application) : AndroidViewModel(app) {
             durationSeconds = _state.value.elapsedSeconds
         )
 
+        // 1) Save locally
         RepCountRepository.add(session)
+
+        // 2) Save to Firestore
+        GymRivalsCloudRepository.addRepSession(session)
 
         _state.value = _state.value.copy(isRunning = false, isPaused = false)
 
-        Log.d(TAG, "Stopped counting. Session saved: ${session.totalReps} reps in ${session.durationSeconds}s")
-    }
-
-    /**
-     * Processes a camera frame for pose detection
-     *
-     * Called by CameraX ImageAnalysis for each frame.
-     * Converts the frame to ML Kit InputImage, runs pose detection,
-     * and passes the result to RepCounter.
-     *
-     * @param imageProxy The camera frame from CameraX
-     */
-    @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
-    private fun processImageProxy(imageProxy: ImageProxy) {
-        val mediaImage = imageProxy.image
-        if (mediaImage == null) {
-            imageProxy.close()
-            return
-        }
-
-        // Skip processing if not actively counting
-        if (!_state.value.isRunning || _state.value.isPaused) {
-            imageProxy.close()
-            return
-        }
-
-        // Convert to ML Kit InputImage
-        val inputImage = InputImage.fromMediaImage(
-            mediaImage,
-            imageProxy.imageInfo.rotationDegrees
+        Log.d(
+            TAG,
+            "Stopped counting. Session saved: ${session.totalReps} reps in ${session.durationSeconds}s"
         )
-
-        // Run pose detection
-        poseDetector?.process(inputImage)
-            ?.addOnSuccessListener { pose ->
-                // Pass pose to rep counter
-                repCounter?.processPose(pose)
-            }
-            ?.addOnFailureListener { e ->
-                Log.e(TAG, "Pose detection failed", e)
-            }
-            ?.addOnCompleteListener {
-                imageProxy.close()
-            }
     }
 
-    /**
-     * Starts the session timer
-     *
-     * Updates elapsed time every second while the session is running.
-     */
+    // ---------- TIMER ----------
     private fun startTimer() {
         timerJob?.cancel()
         timerJob = viewModelScope.launch {
             while (_state.value.isRunning) {
                 if (!_state.value.isPaused) {
-                    val elapsed = ((System.currentTimeMillis() - sessionStartTime) / 1000).toInt()
+                    val elapsed =
+                        ((System.currentTimeMillis() - sessionStartTime) / 1000).toInt()
                     _state.value = _state.value.copy(elapsedSeconds = elapsed)
                 }
-                kotlinx.coroutines.delay(1000L)
+                delay(1000)
             }
         }
     }
 
-    /**
-     * Stops the session timer
-     */
     private fun stopTimer() {
         timerJob?.cancel()
         timerJob = null
     }
 
-    /**
-     * Cleans up resources when ViewModel is destroyed
-     */
+    // ---------- IMAGE PROCESSING ----------
+    @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
+    private fun processImageProxy(imageProxy: ImageProxy) {
+        val img = imageProxy.image ?: run {
+            imageProxy.close()
+            return
+        }
+
+        if (!_state.value.isRunning || _state.value.isPaused) {
+            imageProxy.close()
+            return
+        }
+
+        val inputImage = InputImage.fromMediaImage(
+            img,
+            imageProxy.imageInfo.rotationDegrees
+        )
+
+        poseDetector
+            ?.process(inputImage)
+            ?.addOnSuccessListener { pose ->
+                repCounter?.processPose(pose)
+            }
+            ?.addOnFailureListener { e -> Log.e(TAG, "Pose detection failed", e) }
+            ?.addOnCompleteListener { imageProxy.close() }
+    }
+
+    // ---------- CLEANUP ----------
     override fun onCleared() {
         super.onCleared()
-
         stopTimer()
         cameraProvider?.unbindAll()
         poseDetector?.close()
         cameraExecutor?.shutdown()
-
-        Log.d(TAG, "RepCounterViewModel cleared")
     }
 }

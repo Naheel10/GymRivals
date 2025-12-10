@@ -12,13 +12,16 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlin.math.*
+import com.google.android.gms.maps.model.LatLng
 
 data class RunUiState(
     val isRunning: Boolean = false,
     val isPaused: Boolean = false,
     val elapsedMillis: Long = 0L,
     val distanceMeters: Double = 0.0,
-    val paceSecPerMile: Int? = null // null until we have movement/time
+    val paceSecPerMile: Int? = null, // null until we have movement/time
+    val pathPoints: List<LatLng> = emptyList(),
+    val currentLocation: LatLng? = null
 )
 
 class RunTrackerViewModel(app: Application) : AndroidViewModel(app) {
@@ -51,7 +54,14 @@ class RunTrackerViewModel(app: Application) : AndroidViewModel(app) {
         pausedAccumulated = 0L
         pauseStartedAt = 0L
         lastLocation = null
-        _state.value = RunUiState(isRunning = true, isPaused = false, elapsedMillis = 0L, distanceMeters = 0.0, paceSecPerMile = null)
+        _state.value = RunUiState(
+            isRunning = true,
+            isPaused = false,
+            elapsedMillis = 0L,
+            distanceMeters = 0.0,
+            paceSecPerMile = null,
+            pathPoints = emptyList()  // reset path
+        )
         startTimer()
         startLocationUpdates()
     }
@@ -97,7 +107,7 @@ class RunTrackerViewModel(app: Application) : AndroidViewModel(app) {
         timerJob?.cancel()
         timerJob = null
     }
-// Test location
+    // Test location
     @SuppressLint("MissingPermission")
     private fun startLocationUpdates() {
         fused.requestLocationUpdates(locationRequest, callback, null)
@@ -109,16 +119,35 @@ class RunTrackerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun onNewLocation(loc: Location) {
         if (_state.value.isPaused) return
+
+        val newPoint = LatLng(loc.latitude, loc.longitude)
+
+        // Always update current location
+        _state.value = _state.value.copy(currentLocation = newPoint)
+
         val prev = lastLocation
         lastLocation = loc
+
         if (prev != null) {
             val d = prev.distanceTo(loc).toDouble() // meters
             // Filter tiny jitter (< 1m) to reduce noise
             if (d > 1.0) {
                 val total = _state.value.distanceMeters + d
                 val newPace = computePaceSecPerMile(_state.value.elapsedMillis, total)
-                _state.value = _state.value.copy(distanceMeters = total, paceSecPerMile = newPace)
+
+                val newPath = _state.value.pathPoints + newPoint
+
+                _state.value = _state.value.copy(
+                    distanceMeters = total,
+                    paceSecPerMile = newPace,
+                    pathPoints = newPath
+                )
             }
+        } else {
+            // First location - add to path
+            _state.value = _state.value.copy(
+                pathPoints = listOf(newPoint)
+            )
         }
     }
 
@@ -130,5 +159,16 @@ class RunTrackerViewModel(app: Application) : AndroidViewModel(app) {
         val sec = elapsedMillis / 1000.0
         val paceSecPerMile = sec / miles
         return paceSecPerMile.roundToInt().coerceAtLeast(0)
+    }
+
+    @SuppressLint("MissingPermission")
+    fun getCurrentLocation() {
+        fused.lastLocation.addOnSuccessListener { location ->
+            location?.let {
+                _state.value = _state.value.copy(
+                    currentLocation = LatLng(it.latitude, it.longitude)
+                )
+            }
+        }
     }
 }

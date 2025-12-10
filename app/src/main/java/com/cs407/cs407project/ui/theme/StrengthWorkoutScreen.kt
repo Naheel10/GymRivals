@@ -18,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.cs407.cs407project.data.GymRivalsCloudRepository
 import com.cs407.cs407project.data.StrengthExercise
 import com.cs407.cs407project.data.StrengthWorkout
 import com.cs407.cs407project.data.StrengthWorkoutRepository
@@ -148,6 +149,7 @@ fun StrengthWorkoutScreen(
                             )
                         }
                     )
+                    GymRivalsCloudRepository.addStrengthWorkout(model)
                     StrengthWorkoutRepository.add(model)
                     onSubmit(model)
                 }

@@ -15,11 +15,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.cs407.cs407project.data.GymRivalsCloudRepository
 import com.cs407.cs407project.data.RunEntry
 import com.cs407.cs407project.data.RunHistoryRepository
 import com.cs407.cs407project.data.StrengthExercise
@@ -31,7 +33,6 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.max
-
 
 @Composable
 fun ProgressScreen() {
@@ -65,6 +66,33 @@ fun ProgressScreen() {
     // Bodyweight selection
     val bodyweightOptions = listOf("Push-ups (AI)", "Squats (AI)", "Push Ups (Manual)", "Pull Ups (Manual)")
     var selectedBodyweight by rememberSaveable { mutableStateOf(bodyweightOptions.first()) }
+
+    // Keep local rep sessions in sync with Firestore
+    DisposableEffect(Unit) {
+        val registration = GymRivalsCloudRepository.listenRepSessions { sessions ->
+            RepCountRepository.overwriteAll(sessions)
+        }
+        onDispose {
+            registration?.remove()
+        }
+    }
+    DisposableEffect(Unit) {
+        val runListener = GymRivalsCloudRepository.listenRuns { runs ->
+            RunHistoryRepository.overwriteAll(runs)
+        }
+        val strengthListener = GymRivalsCloudRepository.listenStrengthWorkouts { workouts ->
+            StrengthWorkoutRepository.overwriteAll(workouts)
+        }
+        val repListener = GymRivalsCloudRepository.listenRepSessions { sessions ->
+            RepCountRepository.overwriteAll(sessions)
+        }
+
+        onDispose {
+            runListener?.remove()
+            strengthListener?.remove()
+            repListener?.remove()
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -165,12 +193,12 @@ fun ProgressScreen() {
                     }
                     ChartCard(
                         title = if (selectedLift.isBlank()) "Exercise history" else "$selectedLift — last 5 workouts",
-                        subtitle = "Bars = total reps • Labels = weight (lb)"
+                        subtitle = "Line = max weight • X-axis = date"
                     ) {
                         SessionLineChart(
-                            values = last5.map { it.totalReps.toDouble() },         // Y: total reps per workout (progress)
-                            bottomLabels = last5.map { "${it.weightLbs} lb" },      // X labels: weight used that day
-                            topTitle = "Total reps",
+                            values = last5.map { it.weightLbs.toDouble() },          // Y: max weight per workout
+                            bottomLabels = last5.map { dateShort(it.dateMs) },       // X: workout date
+                            topTitle = "Max weight (lbs)",
                             emptyText = if (selectedLift.isBlank()) "Pick an exercise to see history" else "No history found."
                         )
                     }
@@ -207,11 +235,11 @@ fun ProgressScreen() {
 
                         ChartCard(
                             title = "$selectedBodyweight — last 5 sessions",
-                            subtitle = "Bars = total reps • Labels = duration"
+                            subtitle = "Line = total reps • X-axis = date"
                         ) {
-                            SessionBarChart(
+                            SessionLineChart(
                                 values = last5.map { it.totalReps.toDouble() },
-                                bottomLabels = last5.map { "${it.durationSeconds}s" },
+                                bottomLabels = last5.map { dateShort(it.dateMs) },
                                 topTitle = "Total reps",
                                 emptyText = "No sessions found. Start the Rep Counter to track reps!"
                             )
@@ -228,11 +256,11 @@ fun ProgressScreen() {
 
                         ChartCard(
                             title = "$selectedBodyweight — last 5 sessions",
-                            subtitle = "Bars = total reps • Labels = sets"
+                            subtitle = "Line = total reps • X-axis = date"
                         ) {
-                            SessionBarChart(
+                            SessionLineChart(
                                 values = last5.map { it.totalReps.toDouble() },
-                                bottomLabels = last5.map { "${it.sets} sets" },
+                                bottomLabels = last5.map { dateShort(it.dateMs) },
                                 topTitle = "Total reps",
                                 emptyText = "No sessions found."
                             )
@@ -270,7 +298,7 @@ private fun ChartCard(title: String, subtitle: String? = null, content: @Composa
     }
 }
 
-/* ---- Bar chart for weeks (with tap select) ---- */
+/* ---- Bar chart for weeks (with tap select + connected trend line) ---- */
 @Composable
 private fun WeeklyBarChart(
     values: List<Double>,               // size = 6
@@ -315,7 +343,28 @@ private fun WeeklyBarChart(
             values.forEachIndexed { i, v ->
                 val color = if (i == selectedIndex) Color(0xFF2563EB) else Color(0xFF93C5FD)
                 val top = h - padBottom - barH(v)
-                drawRect(color, topLeft = Offset(xOf(i), top), size = androidx.compose.ui.geometry.Size(barWidth, barH(v)))
+                drawRect(
+                    color,
+                    topLeft = Offset(xOf(i), top),
+                    size = androidx.compose.ui.geometry.Size(barWidth, barH(v))
+                )
+            }
+
+            // connected line & points showing trend across weeks
+            if (values.isNotEmpty()) {
+                val path = androidx.compose.ui.graphics.Path()
+                values.forEachIndexed { i, v ->
+                    val cx = xOf(i) + barWidth / 2f
+                    val cy = h - padBottom - barH(v)
+                    if (i == 0) path.moveTo(cx, cy) else path.lineTo(cx, cy)
+                }
+                drawPath(path, color = Color(0xFF2563EB), style = Stroke(width = 4f))
+
+                values.forEachIndexed { i, v ->
+                    val cx = xOf(i) + barWidth / 2f
+                    val cy = h - padBottom - barH(v)
+                    drawCircle(color = Color(0xFF2563EB), radius = 6f, center = Offset(cx, cy))
+                }
             }
 
             // labels
@@ -335,7 +384,7 @@ private fun WeeklyBarChart(
     }
 }
 
-/* ---- Simple session bar chart (last 5 items) ---- */
+/* ---- Simple session bar chart (still available if needed elsewhere) ---- */
 @Composable
 private fun SessionBarChart(
     values: List<Double>,          // size up to 5 (oldest→newest)
@@ -391,10 +440,11 @@ private fun SessionBarChart(
         }
     }
 }
+
 @Composable
 private fun SessionLineChart(
     values: List<Double>,          // up to 5, oldest → newest
-    bottomLabels: List<String>,    // same size (e.g., "135 lb")
+    bottomLabels: List<String>,    // same size (e.g., "135 lb" or date)
     topTitle: String,
     emptyText: String
 ) {
@@ -429,7 +479,7 @@ private fun SessionLineChart(
                 val px = x(i); val py = y(v)
                 if (i == 0) path.moveTo(px, py) else path.lineTo(px, py)
             }
-            drawPath(path, color = Color(0xFF2563EB))
+            drawPath(path, color = Color(0xFF2563EB), style = Stroke(width = 4f))
 
             // Points
             values.forEachIndexed { i, v ->
@@ -593,7 +643,7 @@ private fun last5RepCounterSessions(sessions: List<RepSession>, exerciseType: St
             LiftSession(
                 dateMs = repSession.timestampMs,
                 totalReps = repSession.totalReps,
-                sets = repSession.durationSeconds, // Store duration in sets field for display
+                sets = repSession.durationSeconds, // still stored here if needed elsewhere
                 weightLbs = 0
             )
         }
@@ -634,7 +684,13 @@ private fun ExposedDropdown(value: String, options: List<String>, onSelect: (Str
 }
 
 /* ---- formatting helpers ---- */
-private fun dateLong(ms: Long): String = SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(ms)
+
+private fun dateShort(ms: Long): String =
+    SimpleDateFormat("M/d", Locale.getDefault()).format(ms)
+
+private fun dateLong(ms: Long): String =
+    SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(ms)
+
 private fun elapsedText(ms: Long): String {
     val t = (ms / 1000).toInt().coerceAtLeast(0)
     val h = t / 3600; val m = (t % 3600) / 60; val s = t % 60

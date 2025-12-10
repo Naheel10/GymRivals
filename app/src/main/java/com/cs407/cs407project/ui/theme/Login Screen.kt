@@ -1,5 +1,6 @@
 package com.example.gymrivals.ui
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -30,6 +31,9 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.cs407.cs407project.data.GymRivalsCloudRepository
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthException
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,18 +41,87 @@ fun GymRivalsLoginScreen(
     onLogin: (email: String, password: String, rememberMe: Boolean) -> Unit = { _, _, _ -> },
     onGoogleLogin: () -> Unit = {},
     onForgotPassword: () -> Unit = {},
-    onSignUp: () -> Unit = {},
+    onSignUpNav: () -> Unit = {}, // Use if you want external navigation
 ) {
-    val gradient = Brush.verticalGradient(
-        0f to Color(0xFF0EA5E9),
-        1f to Color(0xFF7C3AED)
-    )
+
+    // ------------------------------------------------------------
+    // UI State
+    // ------------------------------------------------------------
 
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var rememberMe by remember { mutableStateOf(false) }
+    var isSignUp by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+
     val focus = LocalFocusManager.current
+    val auth = remember { FirebaseAuth.getInstance() }
+
+    val gradient = Brush.verticalGradient(
+        0f to Color(0xFF0EA5E9),
+        1f to Color(0xFF7C3AED)
+    )
+
+    // ------------------------------------------------------------
+    // Firebase Authentication Handler
+    // ------------------------------------------------------------
+
+    fun handleAuth() {
+        val trimmedEmail = email.trim()
+        val trimmedPassword = password.trim()
+
+        errorMessage = null
+
+        if (trimmedEmail.isBlank() || trimmedPassword.isBlank()) {
+            errorMessage = "Please enter both email and password."
+            return
+        }
+
+        isLoading = true
+
+        val task =
+            if (isSignUp)
+                auth.createUserWithEmailAndPassword(trimmedEmail, trimmedPassword)
+            else
+                auth.signInWithEmailAndPassword(trimmedEmail, trimmedPassword)
+
+        task.addOnCompleteListener { result ->
+            isLoading = false
+            if (result.isSuccessful) {
+
+                // Save or update user's Firestore profile
+                GymRivalsCloudRepository.saveBasicProfile()
+
+                // Navigate app
+                onLogin(trimmedEmail, trimmedPassword, rememberMe)
+
+            } else {
+                val ex = result.exception
+                val code = (ex as? FirebaseAuthException)?.errorCode
+                Log.e("Auth", "Auth failed: code=$code, message=${ex?.message}", ex)
+
+                errorMessage = when (code) {
+                    "ERROR_INVALID_EMAIL" -> "Invalid email format."
+                    "ERROR_USER_NOT_FOUND" -> "Account not found."
+                    "ERROR_WRONG_PASSWORD" -> "Incorrect password."
+                    "ERROR_EMAIL_ALREADY_IN_USE" ->
+                        "An account with this email already exists."
+                    "ERROR_WEAK_PASSWORD" ->
+                        "Password should be at least 6 characters."
+                    "ERROR_NETWORK_REQUEST_FAILED" ->
+                        "Network error. Please check your internet."
+                    else ->
+                        ex?.localizedMessage ?: "Authentication failed."
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------
+    // UI Layout
+    // ------------------------------------------------------------
 
     Box(
         modifier = Modifier
@@ -57,6 +130,7 @@ fun GymRivalsLoginScreen(
             .systemBarsPadding()
             .imePadding()
     ) {
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -64,9 +138,10 @@ fun GymRivalsLoginScreen(
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+
             Spacer(Modifier.height(28.dp))
 
-            // Logo circle (no icon libs)
+            // Logo
             Box(
                 modifier = Modifier
                     .size(78.dp)
@@ -85,18 +160,23 @@ fun GymRivalsLoginScreen(
             Spacer(Modifier.height(12.dp))
 
             Text(
-                text = "GymRivals",
+                "GymRivals",
                 color = Color.White,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.SemiBold
             )
+
             Text(
-                text = "Track. Compete. Dominate.",
+                "Track. Compete. Dominate.",
                 color = Color.White.copy(alpha = 0.9f),
                 fontSize = 14.sp
             )
 
             Spacer(Modifier.height(22.dp))
+
+            // ------------------------------------------------------------
+            // Card Content
+            // ------------------------------------------------------------
 
             Card(
                 modifier = Modifier
@@ -106,26 +186,29 @@ fun GymRivalsLoginScreen(
                 shape = RoundedCornerShape(18.dp),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
+
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp, vertical = 22.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+
                     Text(
-                        "Welcome Back",
+                        if (isSignUp) "Create Account" else "Welcome Back",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Color(0xFF111827)
                     )
+
                     Spacer(Modifier.height(18.dp))
 
+                    // Email
                     OutlinedTextField(
                         value = email,
                         onValueChange = { email = it },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("Email") },
-                        placeholder = { Text("alex@example.com") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Email,
@@ -135,36 +218,37 @@ fun GymRivalsLoginScreen(
 
                     Spacer(Modifier.height(14.dp))
 
+                    // Password
                     OutlinedTextField(
                         value = password,
                         onValueChange = { password = it },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text("Password") },
                         singleLine = true,
-                        visualTransformation = if (showPassword) VisualTransformation.None
+                        visualTransformation = if (showPassword)
+                            VisualTransformation.None
                         else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Password,
-                            imeAction = ImeAction.Done
-                        ),
-                        keyboardActions = KeyboardActions(
-                            onDone = {
-                                focus.clearFocus(force = true)
-                                onLogin(email, password, rememberMe)
-                            }
-                        ),
                         trailingIcon = {
-                            // Replaces eye icon with a small text toggle
                             TextButton(onClick = { showPassword = !showPassword }) {
                                 Text(
                                     if (showPassword) "Hide" else "Show",
                                     fontSize = 12.sp
                                 )
                             }
-                        }
+                        },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onDone = {
+                                focus.clearFocus()
+                                if (!isLoading) handleAuth()
+                            }
+                        )
                     )
 
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(6.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -180,101 +264,142 @@ fun GymRivalsLoginScreen(
                             )
                             Text("Remember me")
                         }
+
+                        if (!isSignUp) {
+                            Text(
+                                "Forgot Password?",
+                                color = Color(0xFF6366F1),
+                                modifier = Modifier.clickable { onForgotPassword() },
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    // Error message
+                    errorMessage?.let {
+                        Spacer(Modifier.height(8.dp))
                         Text(
-                            text = "Forgot Password?",
-                            color = Color(0xFF6366F1),
-                            modifier = Modifier.clickable { onForgotPassword() },
-                            textDecoration = TextDecoration.None,
-                            fontWeight = FontWeight.SemiBold
+                            text = it,
+                            color = Color(0xFFDC2626),
+                            fontSize = 13.sp
                         )
                     }
 
                     Spacer(Modifier.height(14.dp))
 
+                    // Log in / Sign up button
                     val buttonBrush = Brush.horizontalGradient(
                         colors = listOf(Color(0xFF3B82F6), Color(0xFF8B5CF6))
                     )
+
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp)
                             .clip(RoundedCornerShape(14.dp))
                             .background(buttonBrush)
-                            .clickable {
-                                focus.clearFocus(force = true)
-                                onLogin(email, password, rememberMe)
+                            .clickable(enabled = !isLoading) {
+                                focus.clearFocus()
+                                if (!isLoading) handleAuth()
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = "Log In",
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                Modifier.size(24.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text(
+                                text = if (isSignUp) "Sign Up" else "Log In",
+                                color = Color.White,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
 
                     Spacer(Modifier.height(16.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        HorizontalDivider(modifier = Modifier.weight(1f))
-                        Text(
-                            "  Or continue with  ",
-                            color = Color(0xFF6B7280),
-                            fontSize = 12.sp
-                        )
-                        HorizontalDivider(modifier = Modifier.weight(1f))
-                    }
-
-                    Spacer(Modifier.height(12.dp))
-
-                    OutlinedButton(
-                        onClick = onGoogleLogin,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .clip(CircleShape)
-                                .background(Color.White),
-                            contentAlignment = Alignment.Center
+                    if (!isSignUp) {
+                        // Divider OR Google login
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("G", color = Color(0xFF4285F4), fontWeight = FontWeight.Bold)
+                            HorizontalDivider(Modifier.weight(1f))
+                            Text(
+                                "  Or continue with  ",
+                                color = Color(0xFF6B7280),
+                                fontSize = 12.sp
+                            )
+                            HorizontalDivider(Modifier.weight(1f))
                         }
-                        Spacer(Modifier.width(10.dp))
-                        Text("Google")
-                    }
 
-                    Spacer(Modifier.height(14.dp))
+                        Spacer(Modifier.height(12.dp))
+
+                        OutlinedButton(
+                            onClick = { onGoogleLogin() },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ){
+                            Box(
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("G", color = Color(0xFF4285F4), fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Text("Google")
+                        }
+
+                        Spacer(Modifier.height(14.dp))
+                    }
 
                     Row {
-                        Text("Don't have an account? ")
+                        Text(if (isSignUp) "Already have an account? " else "Don't have an account? ")
                         Text(
-                            "Sign Up",
+                            if (isSignUp) "Log In" else "Sign Up",
                             color = Color(0xFF2563EB),
                             fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.clickable { onSignUp() }
+                            modifier = Modifier.clickable {
+                                isSignUp = !isSignUp
+                                errorMessage = null
+                                onSignUpNav()
+                            }
                         )
                     }
                 }
             }
 
+            // Footer terms
             val footer: AnnotatedString = buildAnnotatedString {
                 append("By continuing, you agree to our ")
-                pushStyle(SpanStyle(color = Color.White, textDecoration = TextDecoration.Underline))
+                pushStyle(
+                    SpanStyle(
+                        color = Color.White,
+                        textDecoration = TextDecoration.Underline
+                    )
+                )
                 append("Terms of Service")
                 pop()
                 append(" and ")
-                pushStyle(SpanStyle(color = Color.White, textDecoration = TextDecoration.Underline))
+                pushStyle(
+                    SpanStyle(
+                        color = Color.White,
+                        textDecoration = TextDecoration.Underline
+                    )
+                )
                 append("Privacy Policy")
                 pop()
             }
+
             Text(
                 text = footer,
                 color = Color.White.copy(alpha = 0.85f),
@@ -288,7 +413,7 @@ fun GymRivalsLoginScreen(
 
 @Preview(showBackground = true, showSystemUi = true)
 @Composable
-private fun PreviewGymRivalsLoginScreen_NoIcons() {
+private fun PreviewGymRivalsLoginScreen() {
     MaterialTheme(colorScheme = lightColorScheme()) {
         GymRivalsLoginScreen()
     }
